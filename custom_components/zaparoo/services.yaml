@@ -65,3 +65,26 @@ media:
       selector:
         device:
           integration: zaparoo
+
+switch_profile:
+  name: Switch profile
+  description: Switch the active Zaparoo Core profile.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: zaparoo
+    profile_id:
+      name: Profile ID
+      description: Core profile ID from the Active profile sensor.
+      required: true
+      selector:
+        text:
+    pin:
+      name: PIN
+      description: Optional PIN for a protected profile.
+      selector:
+        text:
+          type: password

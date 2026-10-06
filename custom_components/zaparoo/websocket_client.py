@@ -20,7 +20,23 @@ API_PATH = "/api/v0.1"
 
 _LOGGER = logging.getLogger(__name__)
 MAX_BUFFERED_EVENTS = 1024
+METHOD_NOT_FOUND = -32601
 SNAPSHOT_METHODS = ("media", "readers")
+OPTIONAL_SNAPSHOT_METHODS = (
+    "profiles",
+    "profiles.active",
+    "playtime",
+    "clients.current",
+)
+
+
+class ZaparooRPCError(HomeAssistantError):
+    """Preserve the protocol code for optional Core capabilities."""
+
+    def __init__(self, code: int | None, detail: str) -> None:
+        """Initialize a Core JSON-RPC error."""
+        super().__init__(f"RPC {code}: {detail}")
+        self.code = code
 
 
 class ZaparooWebSocket:
@@ -112,11 +128,21 @@ class ZaparooWebSocket:
     async def refresh(self) -> None:
         """Fetch state that notifications cannot replay after a disconnect."""
         async with self._refresh_lock:
-            methods = SNAPSHOT_METHODS
-            replies = await asyncio.gather(*(self.send_jsonrpc(m) for m in methods))
+            methods = SNAPSHOT_METHODS + OPTIONAL_SNAPSHOT_METHODS
+            replies = await asyncio.gather(
+                *(self._snapshot_request(m) for m in methods)
+            )
             self.coordinator.set_snapshot(
                 dict(zip(methods, (r["result"] for r in replies), strict=True))
             )
+
+    async def _snapshot_request(self, method: str) -> dict[str, Any]:
+        try:
+            return await self.send_jsonrpc(method)
+        except ZaparooRPCError as err:
+            if method in OPTIONAL_SNAPSHOT_METHODS and err.code == METHOD_NOT_FOUND:
+                return {"result": None}
+            raise
 
     async def _listen(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         async for message in ws:
@@ -143,7 +169,7 @@ class ZaparooWebSocket:
                     error = data["error"] if isinstance(data["error"], dict) else {}
                     code = error.get("code")
                     detail = error.get("message", "request failed")
-                    future.set_exception(HomeAssistantError(f"RPC {code}: {detail}"))
+                    future.set_exception(ZaparooRPCError(code, detail))
                 elif "result" in data:
                     future.set_result(data)
                 else:

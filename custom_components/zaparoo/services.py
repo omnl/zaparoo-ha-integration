@@ -21,6 +21,15 @@ if TYPE_CHECKING:
 SERVICE_LAUNCH = "launch"
 SERVICE_STOP = "stop"
 SERVICE_MEDIA = "media"
+SERVICE_SWITCH_PROFILE = "switch_profile"
+
+SWITCH_PROFILE_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): vol.Any(str, [str]),
+        vol.Required("profile_id"): str,
+        vol.Optional("pin"): str,
+    }
+)
 
 LAUNCH_SCHEMA = vol.Schema(
     {
@@ -138,12 +147,24 @@ async def async_media_service(call: ServiceCall) -> Any:
     return response.get("result") if isinstance(response, dict) else None
 
 
+async def async_switch_profile_service(call: ServiceCall) -> None:
+    """Switch an explicit profile on the target Core instance."""
+    params = {"profileId": call.data["profile_id"]}
+    if "pin" in call.data:
+        params["pin"] = call.data["pin"]
+    for device_id in dict.fromkeys(_device_ids_from_target(call)):
+        ws = _get_ws_for_device(call.hass, device_id)
+        await ws.send_jsonrpc("profiles.switch", params)
+        await ws.refresh()
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     """Register all the above services."""
     for name, handler, schema in (
         (SERVICE_LAUNCH, async_launch_service, LAUNCH_SCHEMA),
         (SERVICE_STOP, async_stop_service, NO_BODY_SCHEMA),
         (SERVICE_MEDIA, async_media_service, NO_BODY_SCHEMA),
+        (SERVICE_SWITCH_PROFILE, async_switch_profile_service, SWITCH_PROFILE_SCHEMA),
     ):
         if not hass.services.has_service(DOMAIN, name):
             hass.services.async_register(
@@ -159,7 +180,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
 def async_unregister_services(hass: HomeAssistant) -> None:
     """Remove services after the final integration instance unloads."""
-    for name in (SERVICE_LAUNCH, SERVICE_STOP, SERVICE_MEDIA):
+    for name in (SERVICE_LAUNCH, SERVICE_STOP, SERVICE_MEDIA, SERVICE_SWITCH_PROFILE):
         hass.services.async_remove(DOMAIN, name)
 
 

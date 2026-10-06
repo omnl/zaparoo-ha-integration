@@ -10,6 +10,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import DOMAIN
 
 if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,9 +19,11 @@ _LOGGER = logging.getLogger(__name__)
 class ZaparooCoordinator(DataUpdateCoordinator):
     """Keep genuine events separate from snapshot refreshes."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry | None = None) -> None:
         """Initialize Core state without replaying historical events."""
-        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=None)
+        super().__init__(
+            hass, _LOGGER, name=DOMAIN, update_interval=None, config_entry=entry
+        )
         self.data = {
             "connected": False,
             "synchronized": False,
@@ -41,7 +44,9 @@ class ZaparooCoordinator(DataUpdateCoordinator):
             {k: v for k, v in p.items() if k != "switchId"}
             for p in (snapshot.get("profiles") or {}).get("profiles", [])
         ]
-        self.data["active_profile"] = snapshot.get("profiles.active")
+        self.data["active_profile"] = self._safe_profile(
+            snapshot.get("profiles.active")
+        )
         media = snapshot.get("media") or {}
         self.data["media"] = next(
             (m for m in media.get("active", []) if m.get("slot") != "background"), None
@@ -54,11 +59,17 @@ class ZaparooCoordinator(DataUpdateCoordinator):
         self.data["readers"] = {r["path"]: r for r in readers if "path" in r}
         self.async_set_updated_data(dict(self.data))
 
+    @staticmethod
+    def _safe_profile(profile: dict[str, Any] | None) -> dict[str, Any] | None:
+        return (
+            {k: v for k, v in profile.items() if k != "switchId"} if profile else None
+        )
+
     def handle_ws_event(self, method: str, params: dict[str, Any] | None) -> None:
         """Accept nullable parameters and current Core notification names."""
         payload = params if isinstance(params, dict) else {}
         if method == "profiles.active":
-            self.data["active_profile"] = payload.get("profile")
+            self.data["active_profile"] = self._safe_profile(payload.get("profile"))
         elif method == "media.started":
             self.data["media"] = payload
         elif method == "media.stopped":

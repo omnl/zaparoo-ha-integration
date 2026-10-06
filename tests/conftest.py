@@ -43,7 +43,18 @@ async def core_server():
         async for message in ws:
             data = json.loads(message.data)
             requests.append(data)
-            if data["method"] == "fail":
+            if data["method"] in snapshots.get("unsupported", []):
+                await ws.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": data["id"],
+                        "error": {"code": -32601, "message": "Method not found"},
+                    }
+                )
+            elif (
+                data["method"] in snapshots.get("denied", [])
+                or data["method"] == "fail"
+            ):
                 await ws.send_json(
                     {
                         "jsonrpc": "2.0",

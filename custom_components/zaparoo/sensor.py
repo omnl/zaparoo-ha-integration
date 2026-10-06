@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.const import UnitOfTime
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from custom_components.zaparoo.const import DOMAIN
 from custom_components.zaparoo.coordinator import ZaparooCoordinator
+
+from .models import duration_minutes
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -34,6 +37,9 @@ async def async_setup_entry(
             ZaparooNotificationSensor(entry, coordinator, host),
             ZaparooConnectedSensor(entry, coordinator, host),
             ZaparooMediaSensor(entry, coordinator, host),
+            ZaparooProfileSensor(entry, coordinator),
+            ZaparooPlaytimeSensor(entry, coordinator, "dailyUsageToday"),
+            ZaparooPlaytimeSensor(entry, coordinator, "dailyRemaining"),
         ]
     )
 
@@ -140,3 +146,60 @@ class ZaparooMediaSensor(CoordinatorEntity[ZaparooCoordinator], SensorEntity):
             return None
 
         return media
+
+
+class ZaparooProfileSensor(CoordinatorEntity, SensorEntity):
+    """Expose the current Core profile without private switch tokens."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Active profile"
+    _attr_icon = "mdi:account"
+
+    def __init__(
+        self, entry: ZaparooDataConfigEntry, coordinator: ZaparooCoordinator
+    ) -> None:
+        """Initialize the profile sensor on the Core device."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_active_profile"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the active profile's display name."""
+        return (self.coordinator.data.get("active_profile") or {}).get("name")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose safe profile IDs for explicit switching actions."""
+        profile = self.coordinator.data.get("active_profile") or {}
+        return {
+            "profile_id": profile.get("profileId"),
+            "profiles": self.coordinator.data.get("profiles", []),
+        }
+
+
+class ZaparooPlaytimeSensor(CoordinatorEntity, SensorEntity):
+    """Display current Core accounting for the active profile."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+
+    def __init__(
+        self, entry: ZaparooDataConfigEntry, coordinator: ZaparooCoordinator, field: str
+    ) -> None:
+        """Initialize a duration sensor on the Core device."""
+        super().__init__(coordinator)
+        self.field = field
+        self._attr_unique_id = f"{entry.entry_id}_{field}"
+        self._attr_name = (
+            "Media time today" if field == "dailyUsageToday" else "Daily time remaining"
+        )
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
+
+    @property
+    def native_value(self) -> float | None:
+        """Return Core's duration without inventing zero for missing limits."""
+        return duration_minutes(
+            self.coordinator.data.get("playtime", {}).get(self.field)
+        )
