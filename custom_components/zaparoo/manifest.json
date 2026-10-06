@@ -1,14 +1,14 @@
 {
+  "domain": "zaparoo",
+  "name": "KidsStation (Zaparoo)",
   "codeowners": [
     "@omnl"
   ],
   "config_flow": true,
   "documentation": "https://github.com/omnl/zaparoo-ha-integration",
-  "domain": "zaparoo",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/omnl/zaparoo-ha-integration/issues",
-  "name": "KidsStation (Zaparoo)",
   "requirements": [],
   "version": "0.1.0"
 }
