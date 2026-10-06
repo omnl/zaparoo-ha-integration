@@ -16,3 +16,10 @@ coverage.xml
 # Home Assistant configuration
 config/*
 !config/configuration.yaml
+.venv/
+dist/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+agent/config.json
+agent/state.json

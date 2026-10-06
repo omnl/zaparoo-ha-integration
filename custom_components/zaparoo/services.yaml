@@ -65,3 +65,77 @@ media:
       selector:
         device:
           integration: zaparoo
+
+switch_profile:
+  name: Switch profile
+  description: Activate a Zaparoo profile; its PIN is required when configured.
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: zaparoo
+    profile_id:
+      selector:
+        text:
+    person:
+      selector:
+        entity:
+          domain: person
+    pin:
+      selector:
+        text:
+          type: password
+
+add_time:
+  name: Add bonus time
+  description: Add minutes to today's combined allowance; expires at local midnight.
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: zaparoo
+    profile_id:
+      selector:
+        text:
+    person:
+      selector:
+        entity:
+          domain: person
+    minutes:
+      required: true
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 1440
+          step: 1
+          mode: box
+          unit_of_measurement: min
+
+set_schedule:
+  name: Set weekly schedule
+  description: Set exactly seven daily minute values, Monday to Sunday; zero blocks a day.
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: zaparoo
+    profile_id:
+      selector:
+        text:
+    person:
+      selector:
+        entity:
+          domain: person
+    minutes:
+      required: true
+      example: [60, 60, 90, 60, 90, 120, 120]
+      selector:
+        object:
+    enabled:
+      default: true
+      selector:
+        boolean:

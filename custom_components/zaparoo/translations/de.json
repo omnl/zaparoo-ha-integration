@@ -1,0 +1,67 @@
+{
+  "title": "KidsStation (Zaparoo)",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Verbindung auswählen",
+        "data": {
+          "transport": "Verbindung"
+        }
+      },
+      "connection": {
+        "title": "KidsStation verbinden",
+        "data": {
+          "host": "Host / IP",
+          "port": "Port",
+          "token": "Agent-Token / API-Schlüssel"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Keine synchronisierte Verbindung möglich.",
+      "invalid_auth": "Der Token wurde abgelehnt."
+    },
+    "abort": {
+      "already_configured": "Dieses Gerät ist bereits konfiguriert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Profil auswählen",
+        "data": {
+          "profile_id": "Zaparoo-Profil"
+        }
+      },
+      "profile": {
+        "title": "Person und Wochenplan",
+        "description": "Minuten pro Tag. 0 sperrt den Tag. Beim Deaktivieren werden die vorherigen Core-Limits wiederhergestellt.",
+        "data": {
+          "person": "Home-Assistant-Person",
+          "enabled": "Wochenplan verwenden",
+          "monday": "Montag (min)",
+          "tuesday": "Dienstag (min)",
+          "wednesday": "Mittwoch (min)",
+          "thursday": "Donnerstag (min)",
+          "friday": "Freitag (min)",
+          "saturday": "Samstag (min)",
+          "sunday": "Sonntag (min)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Der Agent konnte den Plan nicht übernehmen."
+    },
+    "abort": {
+      "no_profiles": "Lege zuerst Profile in Zaparoo an."
+    }
+  },
+  "selector": {
+    "transport": {
+      "options": {
+        "agent": "Batocera-Agent",
+        "direct": "Zaparoo direkt (Medien und Ereignisse)"
+      }
+    }
+  }
+}

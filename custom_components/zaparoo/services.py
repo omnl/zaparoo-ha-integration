@@ -1,8 +1,6 @@
-"""Exposed user services."""
+"""Validated, per-device actions, registered once across all instances."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any, cast
+import uuid
 
 import voluptuous as vol
 from homeassistant.core import SupportsResponse
@@ -11,177 +9,139 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 
-if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant, ServiceCall
-
-    from custom_components.zaparoo.data import ZaparooDataConfigEntry
-
-    from .websocket_client import ZaparooWebSocket
-
-SERVICE_LAUNCH = "launch"
-SERVICE_STOP = "stop"
-SERVICE_MEDIA = "media"
-
-LAUNCH_SCHEMA = vol.Schema(
-    {
-        vol.Optional("type"): str,
-        vol.Optional("text"): str,
-        vol.Optional("data"): str,
-        vol.Optional("unsafe", default=False): bool,
-        vol.Optional("device_id"): object,
-        vol.Optional("area_id"): object,
-    }
-)
-
-NO_BODY_SCHEMA = vol.Schema(
-    {
-        vol.Optional("device_id"): object,
-        vol.Optional("area_id"): object,
-    }
-)
+SERVICES = ("launch", "stop", "media", "switch_profile", "add_time", "set_schedule")
+TARGET = {vol.Required("device_id"): vol.Any(str, [str])}
+RECIPIENT = {
+    vol.Exclusive("profile_id", "recipient"): str,
+    vol.Exclusive("person", "recipient"): str,
+}
 
 
-def _device_ids_from_target(call: ServiceCall) -> list[str]:
-    """Extract device IDs from HA service call."""
-    device_ids = call.data.get("device_id")
-    if not device_ids:
-        msg = "No target devices specified"
-        raise HomeAssistantError(msg)
+def _entry_for_device(hass, device_id):
+    device = dr.async_get(hass).async_get(device_id)
+    if device:
+        for entry_id in device.config_entries:
+            entry = hass.config_entries.async_get_entry(entry_id)
+            if entry and entry.domain == DOMAIN and entry_id in hass.data.get(DOMAIN, {}):
+                return entry
+    raise HomeAssistantError(f"No loaded KidsStation instance for device {device_id}")
+
+
+def _recipient(entry, data):
+    if data.get("profile_id"):
+        return data["profile_id"]
+    matches = [
+        pid
+        for pid, options in entry.options.get("profile_options", {}).items()
+        if data.get("person") and options.get("person") == data["person"]
+    ]
+    if len(matches) != 1:
+        raise HomeAssistantError(
+            "Choose a profile_id or a person linked to exactly one profile on this device"
+        )
+    return matches[0]
+
+
+async def _handle(call):
+    device_ids = call.data["device_id"]
     if isinstance(device_ids, str):
-        return [device_ids]
-    if isinstance(device_ids, list):
-        return device_ids
-    msg = "Invalid device_id type"
-    raise HomeAssistantError(msg)
+        device_ids = [device_ids]
+    if call.service == "media" and len(device_ids) != 1:
+        raise HomeAssistantError("Media query requires exactly one device")
+    for device_id in dict.fromkeys(device_ids):
+        entry = _entry_for_device(call.hass, device_id)
+        client = entry.runtime_data.client
+        data = call.data
+        params = None
+        method = call.service
+        if call.service == "launch":
+            if not any(data.get(k) for k in ("text", "data")):
+                raise HomeAssistantError("Token text or data is required")
+            params = {k: data[k] for k in ("text", "data", "type", "unsafe") if k in data}
+            method = "run"
+        elif call.service == "switch_profile":
+            method = "profiles.switch"
+            params = {"profileId": _recipient(entry, data)}
+            if "pin" in data:
+                params["pin"] = data["pin"]
+        elif call.service in ("add_time", "set_schedule"):
+            if not client.agent:
+                raise HomeAssistantError("This action requires the local KidsStation agent")
+            params = {"profileId": _recipient(entry, data)}
+            if call.service == "add_time":
+                method = "kidsstation.add_time"
+                params.update(minutes=data["minutes"], requestId=str(uuid.uuid4()))
+            else:
+                method = "kidsstation.policy.set"
+                params.update(
+                    minutes=data["minutes"],
+                    enabled=data["enabled"],
+                    timezone=call.hass.config.time_zone,
+                )
+        result = (await client.send_jsonrpc(method, params))["result"]
+        if call.service in ("add_time", "set_schedule"):
+            entry.runtime_data.coordinator.handle_ws_event("kidsstation.state", result)
+        if call.service == "set_schedule":
+            saved = entry.options.get("profile_options", {})
+            pid = params["profileId"]
+            call.hass.config_entries.async_update_entry(
+                entry,
+                options={
+                    **entry.options,
+                    "profile_options": {
+                        **saved,
+                        pid: {
+                            **saved.get(pid, {}),
+                            "minutes": params["minutes"],
+                            "enabled": params["enabled"],
+                        },
+                    },
+                },
+            )
+        if call.service == "media":
+            return result
+    return None
 
 
-async def async_launch_service(call: ServiceCall) -> None:
-    """Call to launch a token."""
-    hass = call.hass
-    device_ids = _device_ids_from_target(call)
-
-    if not any(call.data.get(k) for k in ("text", "data")):
-        msg = "One of 'text' or 'data' is required"
-        raise HomeAssistantError(msg)
-
-    params = {
-        k: v
-        for k, v in {
-            "type": call.data.get("type"),
-            "text": call.data.get("text"),
-            "data": call.data.get("data"),
-            "unsafe": call.data.get("unsafe"),
-        }.items()
-        if v is not None
+def async_register_services(hass):
+    schemas = {
+        "launch": {
+            **TARGET,
+            vol.Optional("type"): str,
+            vol.Optional("text"): str,
+            vol.Optional("data"): str,
+            vol.Optional("unsafe", default=False): bool,
+        },
+        "stop": TARGET,
+        "media": TARGET,
+        "switch_profile": {**TARGET, **RECIPIENT, vol.Optional("pin"): str},
+        "add_time": {
+            **TARGET,
+            **RECIPIENT,
+            vol.Required("minutes"): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
+        },
+        "set_schedule": {
+            **TARGET,
+            **RECIPIENT,
+            vol.Required("minutes"): vol.All(
+                [vol.All(vol.Coerce(int), vol.Range(min=0, max=1440))], vol.Length(min=7, max=7)
+            ),
+            vol.Optional("enabled", default=True): bool,
+        },
     }
-
-    for device_id in device_ids:
-        ws = _get_ws_for_device(hass, device_id)
-
-        try:
-            response = await ws.send_jsonrpc("run", params)
-        except Exception as err:
-            msg = f"Launch failed: {err}"
-            raise HomeAssistantError(msg) from err
-
-        if isinstance(response, dict) and "error" in response:
-            raise HomeAssistantError(response["error"])
-
-        result = response.get("result") if isinstance(response, dict) else None
-        if result not in (None, {}, []):
-            msg = "Non-empty result from Zaparoo run(): %s"
-            raise HomeAssistantError(msg, result)
+    for name, schema in schemas.items():
+        if not hass.services.has_service(DOMAIN, name):
+            hass.services.async_register(
+                DOMAIN,
+                name,
+                _handle,
+                schema=vol.Schema(schema),
+                supports_response=SupportsResponse.ONLY
+                if name == "media"
+                else SupportsResponse.NONE,
+            )
 
 
-async def async_stop_service(call: ServiceCall) -> None:
-    """Call to stop the current running game."""
-    hass = call.hass
-    device_ids = _device_ids_from_target(call)
-
-    for device_id in device_ids:
-        ws = _get_ws_for_device(hass, device_id)
-
-        try:
-            response = await ws.send_jsonrpc("stop")
-        except Exception as err:
-            msg = f"Stop failed: {err}"
-            raise HomeAssistantError(msg) from err
-
-        if isinstance(response, dict) and "error" in response:
-            raise HomeAssistantError(response["error"])
-
-        result = response.get("result") if isinstance(response, dict) else None
-        if result not in (None, {}, []):
-            msg = "Non-empty result from Zaparoo stop(): %s"
-            raise HomeAssistantError(msg, result)
-
-
-async def async_media_service(call: ServiceCall) -> Any:
-    """Call to return the currently running game."""
-    hass = call.hass
-    device_ids = _device_ids_from_target(call)
-    device_id = device_ids[0]
-    ws = _get_ws_for_device(hass, device_id)
-
-    try:
-        response = await ws.send_jsonrpc("media")
-    except Exception as err:
-        msg = f"Media query failed: {err}"
-        raise HomeAssistantError(msg) from err
-
-    if isinstance(response, dict) and "error" in response:
-        raise HomeAssistantError(response["error"])
-
-    return response.get("result") if isinstance(response, dict) else None
-
-
-def async_register_services(hass: HomeAssistant) -> None:
-    """Register all the above services."""
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_LAUNCH,
-        async_launch_service,
-        schema=LAUNCH_SCHEMA,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_STOP,
-        async_stop_service,
-        schema=NO_BODY_SCHEMA,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_MEDIA,
-        async_media_service,
-        schema=NO_BODY_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-
-def _get_ws_for_device(hass: HomeAssistant, device_id: str) -> ZaparooWebSocket:
-    device_reg = dr.async_get(hass)
-    device = device_reg.async_get(device_id)
-
-    if device is None:
-        msg = f"Device not found: {device_id}"
-        raise HomeAssistantError(msg)
-
-    for entry_id in device.config_entries:
-        entry = hass.config_entries.async_get_entry(entry_id)
-
-        if entry is None or entry.domain != DOMAIN:
-            continue
-
-        zap_entry = cast("ZaparooDataConfigEntry", entry)
-        ws = zap_entry.runtime_data.client
-
-        if ws is None:
-            msg = "Zaparoo is not connected"
-            raise HomeAssistantError(msg)
-
-        return ws
-
-    msg = "Zaparoo device not linked to config entry"
-    raise HomeAssistantError(msg)
+def async_unregister_services(hass):
+    for name in SERVICES:
+        hass.services.async_remove(DOMAIN, name)

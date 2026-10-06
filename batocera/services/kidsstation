@@ -1,0 +1,33 @@
+#!/bin/sh
+# Batocera user service: batocera-services enable kidsstation
+ROOT=/userdata/system/kidsstation
+PIDFILE="$ROOT/agent.pid"
+
+start() {
+    if [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        return 0
+    fi
+    "$ROOT/kidsstation-agent" -config "$ROOT/config.json" >> "$ROOT/agent.log" 2>&1 &
+    echo "$!" > "$PIDFILE"
+}
+
+stop() {
+    if [ -s "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null || true
+        count=0
+        while kill -0 "$(cat "$PIDFILE")" 2>/dev/null; do
+            count=$((count + 1))
+            [ "$count" -le 10 ] || return 1
+            sleep 1
+        done
+        rm -f "$PIDFILE"
+    fi
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop && start ;;
+    status) [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

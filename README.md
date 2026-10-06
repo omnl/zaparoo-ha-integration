@@ -1,148 +1,57 @@
-# Zaparoo Home Assistant Integration
+# KidsStation (Zaparoo) — v0.1
 
-The Zaparoo integration connects Home Assistant to a Zaparoo device, allowing you to emulate token scans, control active launchers, and monitor media and connection state in real time.
-This integration is designed with events in mind. It uses a persistent WebSocket connection for fast updates and responsive control.
+A fork of [ZaparooProject/zaparoo-ha-integration](https://github.com/ZaparooProject/zaparoo-ha-integration) for a Batocera kids media station. Home Assistant provides parent controls; a local Go agent schedules Zaparoo profile limits and displays warnings.
 
-## Features
+## Included
 
-- Emulate scanning Zaparoo NFC or token data
-- Stop active launchers remotely
-- Query current media state and database info
-- Live sensors for:
-  - Last Zaparoo event
-  - Device connection state
-  - Currently playing media
-- Compatible with automations, scripts, and dashboards
+- Current Core events, JSON-RPC error handling, reconnect snapshots and a connection binary sensor.
+- Zaparoo profile devices linked to existing Home Assistant persons.
+- One combined daily allowance per profile, with independent values for Monday through Sunday.
+- Persistent daily bonus time, +15/+30/+60 buttons, automatic local-midnight expiry and idempotent grants.
+- Local scheduling when HA is offline, a fail-closed launch hook for zero-minute days, and Kodi/RetroArch/EmulationStation warnings.
+- Existing launch, stop and media actions; profile switching and schedule/bonus actions.
 
-## Installation
+Gaming/video/audio categories are shown for inspection. Independent category limits and weekly budgets are the next release, described in [the roadmap](docs/ROADMAP.md).
 
-### Via HACS (recommended)
+## Install
 
-1. Add this repository as a Custom Repository as Type Integration
-2. Install the Zaparoo integration
-3. Restart Home Assistant
+Start with [the German installation guide](docs/INSTALL_DE.md). Copy `custom_components/zaparoo` into Home Assistant and install the agent on Batocera using the release package. The integration keeps the `zaparoo` domain and replaces the upstream component; it is not an HA Supervisor app/add-on.
 
-### Manual Installation
+The agent requires a locally running Core with profile management, `clients.current` and media launch hooks. It speaks to Core over loopback; Zaparoo remote encryption can stay enabled. The LAN-facing HA connection requires a bearer token. Use your existing Home Assistant remote access for parent controls.
 
-1. Copy `custom_components/zaparoo` into your Home Assistant configuration directory
-2. Restart Home Assistant
+No profile is scheduled until a parent configures it. HA-person links are metadata; NFC profile scans remain the way to identify a child at the station. Core retains playtime measurement and stopping media at its limit.
 
+## Actions
 
-## Configuration
+| Action | Purpose |
+| --- | --- |
+| `zaparoo.launch` | Emulate an NFC/token scan |
+| `zaparoo.stop` | Stop the current launcher |
+| `zaparoo.media` | Return the current media snapshot |
+| `zaparoo.switch_profile` | Activate a profile, supplying its PIN when needed |
+| `zaparoo.set_schedule` | Set seven daily minute values, Monday first |
+| `zaparoo.add_time` | Add minutes to today's allowance |
 
-Configuration is done through the Home Assistant UI.
-You will need:
-- The Zaparoo device hostname or address
-- Network connectivity to the device to the Home Assistant Server
+Actions target a KidsStation device. Profile actions accept `profile_id` or a uniquely linked `person`. Bonus adds to the daily limit; a separately configured Core session limit remains in effect.
 
-Once configured, the integration creates a Zaparoo device with associated sensors and services.
+## Develop and verify
 
+Python 3.13, Go 1.24+:
 
-## Services
-
-### zaparoo.launch
-
-Emulate scanning a Zaparoo token. This is the primary way to trigger ZapScript actions from Home Assistant.
-
-Fields:
-
-- device_id (required)  
-  Target Zaparoo device
-
-- type (optional)  
-  Optional internal token category (used for logging), for example nfc
-
-- text (optional)  
-  Main token text containing ZapScript  
-  Example:
-  **launch.title:SNES/Super Mario World
-
-- data (optional)  
-  Raw token data as a hexadecimal string  
-  Example:
-  04A224BCFF12
-
-- unsafe (optional, default: false)  
-  Allow unsafe ZapScript operations
-
-Example:
-```yaml
-service: zaparoo.launch  
-data:  
-  device_id: YOUR_DEVICE_ID  
-  text: "**launch.title:SNES/Super Mario World"
+```sh
+python -m pip install -r requirements.txt
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
+cd agent
+go test -race ./...
+cd ..
+sh scripts/build-agent
+KIDSSTATION_AGENT_BINARY="$PWD/dist/kidsstation-agent-linux-amd64" python -m pytest -q
 ```
 
-### zaparoo.stop
-
-Stop any active launcher, if supported by the device.
-
-Fields:
-
-- device_id (required)  
-  Target Zaparoo device
-
-Example:
-```yaml
-service: zaparoo.stop  
-data:  
-  device_id: YOUR_DEVICE_ID
-```
-
-### zaparoo.media
-
-Query the current media state and database info.
-This service returns a response payload and is intended for use in scripts and automations that consume service responses.
-
-Fields:
-
-- device_id (required)  
-  Target Zaparoo device
-
-Example:
-```yaml
-service: zaparoo.media  
-data:  
-  device_id: YOUR_DEVICE_ID  
-response_variable: media_state
-```
----
-
-## Sensors
-
-Each configured Zaparoo device provides the following sensors.
-
-### Zaparoo Notification
-
-Displays the most recent Zaparoo notification, such as media.started.
-The sensor exposes additional attributes containing the full event payload received from the device. The full documentation of events can be found [here](https://zaparoo.org/docs/core/api/notifications/)
-
-### Zaparoo Connected
-
-Shows whether the Zaparoo device is currently connected.
-true indicates the device is online  
-false indicates the device is offline or powered off
-
-### Zaparoo Media
-
-Shows the name of the currently playing media, if available.
-Additional attributes expose the full media payload returned by the device, including metadata such as title and platform.
-If no media is active, the sensor state will be unknown.
-
-
-## Debugging
-
-To enable debug logging:
-```yaml
-logger:  
-  logs:  
-    custom_components.zaparoo: debug
-```
+Tests use real WebSockets and simulated Core responses. The process-level test additionally runs the compiled Go agent against the HA Python client. Hardware validation on Batocera is still required before household use.
 
 ## License
 
-GPL-3.0 license
-
-
-
-
+GPL-3.0, inherited from the upstream repository. See [LICENSE](LICENSE).

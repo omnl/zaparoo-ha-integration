@@ -1,0 +1,12 @@
+{
+  "listen": "0.0.0.0:7498",
+  "hookListen": "127.0.0.1:7499",
+  "token": "GENERATE_A_TOKEN_WITH_THE_AGENT",
+  "coreUrl": "ws://127.0.0.1:7497/api/v0.1",
+  "stateFile": "state.json",
+  "kodiUrl": "http://127.0.0.1:8080/jsonrpc",
+  "kodiUser": "",
+  "kodiPassword": "",
+  "esUrl": "http://127.0.0.1:1234/notify",
+  "retroArchAddress": "127.0.0.1:55355"
+}
