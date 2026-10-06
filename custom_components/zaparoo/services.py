@@ -120,6 +120,9 @@ async def async_media_service(call: ServiceCall) -> Any:
     """Call to return the currently running game."""
     hass = call.hass
     device_ids = _device_ids_from_target(call)
+    if len(device_ids) != 1:
+        msg = "Media query requires exactly one device"
+        raise HomeAssistantError(msg)
     device_id = device_ids[0]
     ws = _get_ws_for_device(hass, device_id)
 
@@ -137,27 +140,27 @@ async def async_media_service(call: ServiceCall) -> Any:
 
 def async_register_services(hass: HomeAssistant) -> None:
     """Register all the above services."""
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_LAUNCH,
-        async_launch_service,
-        schema=LAUNCH_SCHEMA,
-    )
+    for name, handler, schema in (
+        (SERVICE_LAUNCH, async_launch_service, LAUNCH_SCHEMA),
+        (SERVICE_STOP, async_stop_service, NO_BODY_SCHEMA),
+        (SERVICE_MEDIA, async_media_service, NO_BODY_SCHEMA),
+    ):
+        if not hass.services.has_service(DOMAIN, name):
+            hass.services.async_register(
+                DOMAIN,
+                name,
+                handler,
+                schema=schema,
+                supports_response=SupportsResponse.ONLY
+                if name == SERVICE_MEDIA
+                else SupportsResponse.NONE,
+            )
 
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_STOP,
-        async_stop_service,
-        schema=NO_BODY_SCHEMA,
-    )
 
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_MEDIA,
-        async_media_service,
-        schema=NO_BODY_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
+def async_unregister_services(hass: HomeAssistant) -> None:
+    """Remove services after the final integration instance unloads."""
+    for name in (SERVICE_LAUNCH, SERVICE_STOP, SERVICE_MEDIA):
+        hass.services.async_remove(DOMAIN, name)
 
 
 def _get_ws_for_device(hass: HomeAssistant, device_id: str) -> ZaparooWebSocket:
