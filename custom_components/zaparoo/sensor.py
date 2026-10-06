@@ -65,12 +65,12 @@ class ZaparooNotificationSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         """Display the last notification type (e.g., 'media.started')."""
-        return str(self.coordinator.data.get("last_notification_method"))
+        return str(self.coordinator.data.get("last_event_method"))
 
     @property
     def extra_state_attributes(self) -> Any:
         """Expose event parameters."""
-        return self.coordinator.data.get("last_notification_params") or {}
+        return self.coordinator.data.get("last_event_params") or {}
 
 
 class ZaparooConnectedSensor(CoordinatorEntity, SensorEntity):

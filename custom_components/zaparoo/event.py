@@ -43,6 +43,7 @@ class ZaparooEventEntity(CoordinatorEntity, EventEntity):
         """Init the actual config entry."""
         super().__init__(coordinator)
         self.entry = entry
+        self._last_sequence = coordinator.data.get("event_sequence", 0)
         self._attr_unique_id = f"{entry.entry_id}_event_stream"
 
     @property
@@ -74,8 +75,11 @@ class ZaparooEventEntity(CoordinatorEntity, EventEntity):
         event_type = self._event_type
         event_data = self._event_data
 
-        if event_type:
+        sequence = self.coordinator.data.get("event_sequence", 0)
+        if event_type and sequence != self._last_sequence:
             _LOGGER.debug("Firing HA event entity: %s | %s", event_type, event_data)
             self._trigger_event(event_type, event_data)
+
+        self._last_sequence = sequence
 
         super()._handle_coordinator_update()
