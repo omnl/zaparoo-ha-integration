@@ -9,9 +9,9 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
-import websockets
+import aiohttp
 from homeassistant.exceptions import HomeAssistantError
-from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 if TYPE_CHECKING:
     from .coordinator import ZaparooCoordinator
@@ -59,21 +59,19 @@ class ZaparooWebSocket:
 
     async def _run(self) -> None:
         """Loop reconnect."""
-        url = f"ws://{self.host}:{self.port}{API_PATH}"
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        url = f"ws://{host}:{self.port}{API_PATH}"
+        session = async_get_clientsession(self.coordinator.hass)
         while not self._stop:
             try:
                 _LOGGER.debug("Connecting to Zaparoo WS: %s", url)
-                async with websockets.connect(
-                    url,
-                    ping_interval=15,
-                    ping_timeout=10,
-                ) as ws:
+                async with session.ws_connect(url, heartbeat=15) as ws:
                     self._ws = ws
                     self.coordinator.connected()
                     _LOGGER.info("Zaparoo WS connected")
 
                     await self._listen()
-            except (ConnectionClosedOK, ConnectionClosedError):
+            except (aiohttp.ClientError, TimeoutError):
                 _LOGGER.debug("Zaparoo WS closed")
             except asyncio.CancelledError:
                 _LOGGER.debug("Zaparoo WS task cancelled")
@@ -83,7 +81,7 @@ class ZaparooWebSocket:
 
             self._ws = None
             self.coordinator.disconnected()
-            self._fail_pending(RuntimeError("WebSocket disconnected"))
+            self._fail_pending(HomeAssistantError("WebSocket disconnected"))
 
             if not self._stop:
                 await asyncio.sleep(5)
@@ -98,28 +96,46 @@ class ZaparooWebSocket:
 
         try:
             async for message in ws:
-                self._handle_message(message)
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    self._handle_message(message.data)
+                elif message.type in (
+                    aiohttp.WSMsgType.ERROR,
+                    aiohttp.WSMsgType.CLOSED,
+                ):
+                    break
 
-        except (ConnectionClosedOK, ConnectionClosedError):
+        except (aiohttp.ClientError, TimeoutError):
             pass
 
         except Exception:
             _LOGGER.exception("Unexpected error in WS listener")
 
-    def _handle_message(self, message: websockets.Data) -> None:
+    def _handle_message(self, message: str) -> None:
         """Websocket message handling."""
         try:
             data = json.loads(message)
 
+            if not isinstance(data, dict):
+                return
+
             # JSON-RPC response
             if "id" in data:
                 fut = self._pending.get(data["id"])
-                _LOGGER.info(message)
                 if fut and not fut.done():
-                    fut.set_result(data)
+                    if "error" in data:
+                        error = data["error"] or {}
+                        code = error.get("code")
+                        detail = error.get("message", "request failed")
+                        msg = f"RPC {code}: {detail}"
+                        fut.set_exception(HomeAssistantError(msg))
+                    elif "result" in data:
+                        fut.set_result(data)
+                    else:
+                        msg = "Invalid JSON-RPC response"
+                        fut.set_exception(HomeAssistantError(msg))
 
             # Server-side event
-            if "method" in data:
+            if isinstance(data.get("method"), str):
                 self.coordinator.handle_ws_event(
                     data["method"],
                     data.get("params"),
@@ -129,7 +145,7 @@ class ZaparooWebSocket:
 
     async def send_jsonrpc(self, method: str, params: Any | None = None) -> Any:
         """Send a JSON-RPC request and wait for its response."""
-        if self._ws is None:
+        if self._ws is None or self._ws.closed:
             msg = "Zaparoo WebSocket is not connected"
             raise HomeAssistantError(msg)
 
@@ -148,12 +164,16 @@ class ZaparooWebSocket:
         future = loop.create_future()
         self._pending[rpc_id] = future
 
-        await self._ws.send(json.dumps(payload))
-
         try:
+            await self._ws.send_json(payload)
             return await asyncio.wait_for(future, timeout=10)
+        except (aiohttp.ClientError, OSError) as err:
+            msg = "WebSocket disconnected while sending request"
+            raise HomeAssistantError(msg) from err
         finally:
             self._pending.pop(rpc_id, None)
+            if not future.done():
+                future.cancel()
 
     def _fail_pending(self, exc: Exception) -> None:
         """Fail all pending RPC futures."""
