@@ -22,7 +22,7 @@ async def test_profiles_playtime_and_safe_attributes(hass, core_server):
     await client.start()
     try:
         await client.wait_ready(3)
-        entry = SimpleNamespace(entry_id="core")
+        entry = SimpleNamespace(entry_id="core", options={})
         sensor = ZaparooProfileSensor(entry, coordinator)
         assert sensor.native_value == "Child"
         assert sensor.extra_state_attributes["profile_id"] == "child"
@@ -67,7 +67,19 @@ async def test_switch_profile_targets_only_requested_core(hass, monkeypatch):
         key: SimpleNamespace(send_jsonrpc=AsyncMock(), refresh=AsyncMock())
         for key in ("first", "second")
     }
-    monkeypatch.setattr(services, "_get_ws_for_device", lambda _, key: clients[key])
+    entries = {
+        key: SimpleNamespace(
+            options={},
+            runtime_data=SimpleNamespace(
+                client=client,
+                coordinator=SimpleNamespace(
+                    data={"profiles": [{"profileId": "child"}]}
+                ),
+            ),
+        )
+        for key, client in clients.items()
+    }
+    monkeypatch.setattr(services, "_get_entry_for_device", lambda _, key: entries[key])
     call = ServiceCall(
         hass,
         "zaparoo",

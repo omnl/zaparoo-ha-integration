@@ -1,15 +1,24 @@
 """Config flow for zaparoo."""
 
+from __future__ import annotations
+
 import asyncio
 import uuid
+from typing import TYPE_CHECKING
 
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import CONF_HOST, CONF_PORT, DEFAULT_PORT, DOMAIN
+from .profile import CONF_PROFILE_PEOPLE
+
+if TYPE_CHECKING:
+    from .data import ZaparooDataConfigEntry
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -72,4 +81,98 @@ class ZaparooConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_create_entry(
             title=title, data={CONF_HOST: host, CONF_PORT: port}
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: ZaparooDataConfigEntry,
+    ) -> ZaparooOptionsFlow:
+        """Configure local person links independently of Core settings."""
+        return ZaparooOptionsFlow(config_entry)
+
+
+class ZaparooOptionsFlow(config_entries.OptionsFlow):
+    """Link Core profiles to HA people without modifying or activating profiles."""
+
+    def __init__(self, entry: ZaparooDataConfigEntry) -> None:
+        """Keep a compatible entry reference on supported HA versions."""
+        self._entry = entry
+        self.profile_id: str | None = None
+
+    async def async_step_init(
+        self, user_input: dict | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Choose one of the current Core profiles."""
+        runtime = getattr(self._entry, "runtime_data", None)
+        if runtime is None or not runtime.coordinator.data["connected"]:
+            return self.async_abort(reason="not_connected")
+        profiles = runtime.coordinator.data["profiles"]
+        if not profiles:
+            return self.async_abort(reason="no_profiles")
+        if user_input is not None:
+            self.profile_id = user_input["profile_id"]
+            if self.profile_id not in {p["profileId"] for p in profiles}:
+                return self.async_abort(reason="profile_removed")
+            return await self.async_step_person()
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("profile_id"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                {
+                                    "value": p["profileId"],
+                                    "label": f"{p['name']} [{p['profileId']}]",
+                                }
+                                for p in profiles
+                            ]
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_person(
+        self, user_input: dict | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Add, replace or clear this profile's person link."""
+        profiles = self._entry.runtime_data.coordinator.data["profiles"]
+        if self.profile_id not in {p["profileId"] for p in profiles}:
+            return self.async_abort(reason="profile_removed")
+        people = dict(self._entry.options.get(CONF_PROFILE_PEOPLE, {}))
+        errors = {}
+        if user_input is not None:
+            person = user_input.get("person")
+            if person and (
+                not person.startswith("person.") or self.hass.states.get(person) is None
+            ):
+                errors["base"] = "invalid_person"
+            else:
+                if person:
+                    people[self.profile_id] = person
+                else:
+                    people.pop(self.profile_id, None)
+                return self.async_create_entry(
+                    title="", data={**self._entry.options, CONF_PROFILE_PEOPLE: people}
+                )
+        schema = vol.Schema(
+            {
+                vol.Optional("person"): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="person")
+                )
+            }
+        )
+        return self.async_show_form(
+            step_id="person",
+            errors=errors,
+            description_placeholders={
+                "profile": next(
+                    p["name"] for p in profiles if p["profileId"] == self.profile_id
+                )
+            },
+            data_schema=self.add_suggested_values_to_schema(
+                schema, {"person": people.get(self.profile_id)}
+            ),
         )

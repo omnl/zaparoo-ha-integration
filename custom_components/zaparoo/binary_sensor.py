@@ -13,6 +13,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .profile import ZaparooProfileEntity, async_add_profile_entities
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -28,7 +29,13 @@ async def async_setup_entry(
     add_entities: AddEntitiesCallback,
 ) -> None:
     """Add the connection diagnostic."""
-    add_entities([ZaparooConnectionSensor(entry, entry.runtime_data.coordinator)])
+    coordinator = entry.runtime_data.coordinator
+    add_entities([ZaparooConnectionSensor(entry, coordinator)])
+    async_add_profile_entities(
+        entry,
+        add_entities,
+        lambda profile_id: [ZaparooProfileActiveSensor(entry, coordinator, profile_id)],
+    )
 
 
 class ZaparooConnectionSensor(CoordinatorEntity, BinarySensorEntity):
@@ -52,3 +59,26 @@ class ZaparooConnectionSensor(CoordinatorEntity, BinarySensorEntity):
     def is_on(self) -> bool:
         """Return whether the complete Core snapshot is available."""
         return bool(self.coordinator.data.get("connected"))
+
+
+class ZaparooProfileActiveSensor(ZaparooProfileEntity, BinarySensorEntity):
+    """Report whether this Core profile is active."""
+
+    _attr_name = "Active"
+    _attr_icon = "mdi:account-check"
+
+    def __init__(
+        self,
+        entry: ZaparooDataConfigEntry,
+        coordinator: ZaparooCoordinator,
+        profile_id: str,
+    ) -> None:
+        """Initialize an active diagnostic on a profile device."""
+        super().__init__(entry, coordinator, profile_id, "active")
+
+    @property
+    def is_on(self) -> bool:
+        """Compare stable IDs rather than profile names or HA presence."""
+        return (self.coordinator.data.get("active_profile") or {}).get(
+            "profileId"
+        ) == self.profile_id

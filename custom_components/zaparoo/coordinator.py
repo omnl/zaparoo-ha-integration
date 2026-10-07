@@ -69,7 +69,13 @@ class ZaparooCoordinator(DataUpdateCoordinator):
         """Accept nullable parameters and current Core notification names."""
         payload = params if isinstance(params, dict) else {}
         if method == "profiles.active":
-            self.data["active_profile"] = self._safe_profile(payload.get("profile"))
+            profile = self._safe_profile(payload.get("profile"))
+            old_id = (self.data.get("active_profile") or {}).get("profileId")
+            new_id = (profile or {}).get("profileId")
+            if old_id != new_id:
+                self.data["playtime"] = {}
+            self.data["active_profile"] = profile
+            params = {**payload, "profile": profile}
         elif method == "media.started":
             self.data["media"] = payload
         elif method == "media.stopped":

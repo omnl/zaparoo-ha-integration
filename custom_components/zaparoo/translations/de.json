@@ -1,0 +1,47 @@
+{
+  "title": "Zaparoo",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Zaparoo-Instanz hinzufügen",
+        "description": "Host und Port dieses Zaparoo-Geräts eingeben.",
+        "data": {
+          "host": "Host / IP",
+          "port": "Port"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Dieses Zaparoo-Gerät ist bereits eingerichtet."
+    },
+    "error": {
+      "cannot_connect": "Keine Verbindung zu Zaparoo Core möglich."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Profil einer Person zuordnen",
+        "description": "Ein vorhandenes Profil aus Zaparoo Core wählen.",
+        "data": {
+          "profile_id": "Profil"
+        }
+      },
+      "person": {
+        "title": "Home-Assistant-Person zuordnen",
+        "description": "Eine Person für {profile} wählen. Leer lassen, um die Zuordnung zu entfernen. Profile werden dadurch nicht automatisch gewechselt.",
+        "data": {
+          "person": "Person"
+        }
+      }
+    },
+    "abort": {
+      "not_connected": "Zuerst mit Zaparoo Core verbinden, um Profilzuordnungen zu bearbeiten.",
+      "no_profiles": "Keine Profile verfügbar. Profile in Zaparoo Core erstellen; ältere Core-Versionen unterstützen möglicherweise keine Profile.",
+      "profile_removed": "Dieses Profil existiert nicht mehr. Ein vorhandenes Profil wählen."
+    },
+    "error": {
+      "invalid_person": "Eine vorhandene Home-Assistant-Person wählen."
+    }
+  }
+}

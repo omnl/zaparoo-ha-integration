@@ -53,6 +53,7 @@ class ZaparooWebSocket:
         self._syncing = False
         self._buffer = []
         self._refresh_lock = asyncio.Lock()
+        self._profile_sequence = 0
 
     async def start(self) -> None:
         """Start once; setup waits until the snapshot is available."""
@@ -128,13 +129,24 @@ class ZaparooWebSocket:
     async def refresh(self) -> None:
         """Fetch state that notifications cannot replay after a disconnect."""
         async with self._refresh_lock:
-            methods = SNAPSHOT_METHODS + OPTIONAL_SNAPSHOT_METHODS
+            profile_sequence = self._profile_sequence
+            methods = SNAPSHOT_METHODS + tuple(
+                m for m in OPTIONAL_SNAPSHOT_METHODS if m != "playtime"
+            )
             replies = await asyncio.gather(
                 *(self._snapshot_request(m) for m in methods)
             )
-            self.coordinator.set_snapshot(
-                dict(zip(methods, (r["result"] for r in replies), strict=True))
-            )
+            snapshot = dict(zip(methods, (r["result"] for r in replies), strict=True))
+            # Bracket accounting with identity reads and watch switch events,
+            # including switches away and back during one refresh.
+            snapshot["playtime"] = (await self._snapshot_request("playtime"))["result"]
+            active = (await self._snapshot_request("profiles.active"))["result"]
+            before_id = (snapshot.get("profiles.active") or {}).get("profileId")
+            after_id = (active or {}).get("profileId")
+            if before_id != after_id or profile_sequence != self._profile_sequence:
+                snapshot["playtime"] = {}
+            snapshot["profiles.active"] = active
+            self.coordinator.set_snapshot(snapshot)
 
     async def _snapshot_request(self, method: str) -> dict[str, Any]:
         try:
@@ -177,14 +189,20 @@ class ZaparooWebSocket:
                         HomeAssistantError("Invalid JSON-RPC response")
                     )
         elif isinstance(data.get("method"), str):
-            if self._syncing:
-                self._buffer.append((data["method"], data.get("params")))
-                if len(self._buffer) > MAX_BUFFERED_EVENTS:
-                    self._fail_pending(
-                        HomeAssistantError("Too many events during synchronization")
-                    )
-            else:
-                self.coordinator.handle_ws_event(data["method"], data.get("params"))
+            self._handle_notification(data["method"], data.get("params"))
+
+    def _handle_notification(self, method: str, params: Any) -> None:
+        """Track profile changes even while startup events are buffered."""
+        if method == "profiles.active":
+            self._profile_sequence += 1
+        if self._syncing:
+            self._buffer.append((method, params))
+            if len(self._buffer) > MAX_BUFFERED_EVENTS:
+                self._fail_pending(
+                    HomeAssistantError("Too many events during synchronization")
+                )
+        else:
+            self.coordinator.handle_ws_event(method, params)
 
     async def send_jsonrpc(self, method: str, params: Any = None) -> dict[str, Any]:
         """Return a successful envelope; raise protocol errors immediately."""

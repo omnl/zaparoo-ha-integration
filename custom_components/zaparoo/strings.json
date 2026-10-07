@@ -17,5 +17,31 @@
     "error": {
       "cannot_connect": "Cannot connect to Zaparoo Core."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Link a profile to a person",
+        "description": "Choose a current Zaparoo Core profile.",
+        "data": {
+          "profile_id": "Profile"
+        }
+      },
+      "person": {
+        "title": "Link a Home Assistant person",
+        "description": "Choose a person for {profile}. Leave empty to remove the link. This does not switch profiles automatically.",
+        "data": {
+          "person": "Person"
+        }
+      }
+    },
+    "abort": {
+      "not_connected": "Connect to Zaparoo Core before editing profile links.",
+      "no_profiles": "No profiles are available. Create profiles in Zaparoo Core; older Core versions may not support profiles.",
+      "profile_removed": "This profile no longer exists. Choose a current profile."
+    },
+    "error": {
+      "invalid_person": "Choose an existing Home Assistant person."
+    }
   }
 }

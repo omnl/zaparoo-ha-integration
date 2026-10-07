@@ -24,3 +24,4 @@ class ZaparooData:
     client: ZaparooWebSocket
     coordinator: ZaparooCoordinator
     integration: Integration
+    device_id: str | None = None

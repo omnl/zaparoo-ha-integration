@@ -68,7 +68,7 @@ media:
 
 switch_profile:
   name: Switch profile
-  description: Switch the active Zaparoo Core profile.
+  description: Switch by profile ID, linked HA person or profile device. Core enforces PINs.
   fields:
     device_id:
       name: Device
@@ -78,13 +78,76 @@ switch_profile:
           integration: zaparoo
     profile_id:
       name: Profile ID
-      description: Core profile ID from the Active profile sensor.
-      required: true
+      description: Optional Core profile ID. Omit when using a person, profile device or deactivate.
       selector:
         text:
+    person:
+      name: Person
+      description: Person linked to exactly one profile on the target Core instance. Use instead of profile_id.
+      selector:
+        entity:
+          domain: person
+    deactivate:
+      name: Shared profile
+      description: Set to true to deactivate the named profile. Omit when using profile_id or person.
+      selector:
+        boolean:
     pin:
       name: PIN
       description: Optional PIN for a protected profile.
       selector:
         text:
           type: password
+
+set_profile_limits:
+  name: Set profile limits
+  description: Change Core profile overrides. Core profile-management permission is required.
+  fields:
+    device_id:
+      name: Device
+      description: Target Core device or profile device. Profile devices supply their own profile ID.
+      required: true
+      selector:
+        device:
+          integration: zaparoo
+    profile_id:
+      name: Profile ID
+      description: Optional Core profile ID. Omit when targeting a profile device or linked person.
+      selector:
+        text:
+    person:
+      name: Person
+      description: Person linked to exactly one profile on the target Core instance. Use instead of profile_id.
+      selector:
+        entity:
+          domain: person
+    enabled:
+      name: Enable limits
+      description: Optional profile override for enforcing limits. Omit to leave unchanged.
+      selector:
+        boolean:
+    daily_minutes:
+      name: Daily limit
+      description: Whole minutes. Zero means unlimited. Omit to leave unchanged.
+      selector:
+        number:
+          min: 0
+          max: 1440
+          step: 1
+          mode: box
+          unit_of_measurement: min
+    session_minutes:
+      name: Session limit
+      description: Whole minutes. Zero means unlimited. Omit to leave unchanged.
+      selector:
+        number:
+          min: 0
+          max: 1440
+          step: 1
+          mode: box
+          unit_of_measurement: min
+    clear_limits:
+      name: Inherit global limits
+      description: Clear all profile limit overrides first, then apply any explicitly supplied settings.
+      selector:
+        boolean:

@@ -22,7 +22,12 @@ async def core_server():
     snapshots = {
         "profiles": {
             "profiles": [
-                {"profileId": "child", "name": "Child", "switchId": "secret-card"}
+                {
+                    "profileId": "child",
+                    "name": "Child",
+                    "role": "member",
+                    "switchId": "secret-card",
+                }
             ]
         },
         "profiles.active": {"profileId": "child", "name": "Child"},
@@ -64,8 +69,51 @@ async def core_server():
                 )
             elif data["method"] == "drop":
                 await ws.close()
+            elif data["method"] == "profiles.switch":
+                params = data.get("params", {})
+                profile_id = params.get("profileId")
+                profile = next(
+                    (
+                        p
+                        for p in snapshots["profiles"]["profiles"]
+                        if p["profileId"] == profile_id
+                    ),
+                    None,
+                )
+                if profile and profile.get("hasPin") and params.get("pin") != "1234":
+                    await ws.send_json(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": data["id"],
+                            "error": {"code": -32000, "message": "PIN required"},
+                        }
+                    )
+                    continue
+                snapshots["profiles.active"] = dict(profile) if profile else None
+                await ws.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": data["id"],
+                        "result": snapshots["profiles.active"],
+                    }
+                )
+            elif data["method"] == "playtime" and snapshots.get(
+                "switch_during_playtime"
+            ):
+                await _simulate_profile_switch(ws, snapshots)
+                await ws.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": data["id"],
+                        "result": snapshots["playtime"],
+                    }
+                )
             elif data["method"] == "profiles.update":
-                profile = snapshots["profiles"]["profiles"][0]
+                profile = next(
+                    p
+                    for p in snapshots["profiles"]["profiles"]
+                    if p["profileId"] == data["params"]["profileId"]
+                )
                 params = data["params"]
                 if params.get("clearLimits"):
                     for key in ("dailyLimit", "sessionLimit", "limitsEnabled"):
@@ -95,6 +143,24 @@ async def core_server():
     for ws in sockets:
         await ws.close()
     await runner.cleanup()
+
+
+async def _simulate_profile_switch(ws, snapshots) -> None:
+    profile_id = snapshots.pop("switch_during_playtime")
+    previous = snapshots["profiles.active"]
+    snapshots["profiles.active"] = next(
+        p for p in snapshots["profiles"]["profiles"] if p["profileId"] == profile_id
+    )
+    if snapshots.pop("switch_back", False):
+        for profile in (snapshots["profiles.active"], previous):
+            await ws.send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "profiles.active",
+                    "params": {"profile": profile},
+                }
+            )
+        snapshots["profiles.active"] = previous
 
 
 @pytest.fixture(autouse=True)

@@ -10,6 +10,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
+from .profile import profile_identifier, resolve_profile
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -22,12 +23,27 @@ SERVICE_LAUNCH = "launch"
 SERVICE_STOP = "stop"
 SERVICE_MEDIA = "media"
 SERVICE_SWITCH_PROFILE = "switch_profile"
+SERVICE_SET_PROFILE_LIMITS = "set_profile_limits"
 
 SWITCH_PROFILE_SCHEMA = vol.Schema(
     {
         vol.Required("device_id"): vol.Any(str, [str]),
-        vol.Required("profile_id"): str,
+        vol.Exclusive("profile_id", "recipient"): str,
+        vol.Exclusive("person", "recipient"): str,
+        vol.Exclusive("deactivate", "recipient"): vol.In([True]),
         vol.Optional("pin"): str,
+    }
+)
+
+PROFILE_LIMITS_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): vol.Any(str, [str]),
+        vol.Exclusive("profile_id", "recipient"): str,
+        vol.Exclusive("person", "recipient"): str,
+        vol.Optional("enabled"): bool,
+        vol.Optional("daily_minutes"): vol.All(int, vol.Range(min=0, max=1440)),
+        vol.Optional("session_minutes"): vol.All(int, vol.Range(min=0, max=1440)),
+        vol.Optional("clear_limits", default=False): bool,
     }
 )
 
@@ -147,15 +163,62 @@ async def async_media_service(call: ServiceCall) -> Any:
     return response.get("result") if isinstance(response, dict) else None
 
 
+def _profile_for_target(
+    entry: ZaparooDataConfigEntry, call: ServiceCall, device_id: str
+) -> str:
+    """Allow profile devices as targets while keeping all resolution instance-local."""
+    if call.data.get("profile_id") or call.data.get("person"):
+        return resolve_profile(entry, call.data)
+    device = dr.async_get(call.hass).async_get(device_id)
+    if device:
+        for profile in entry.runtime_data.coordinator.data["profiles"]:
+            if (
+                DOMAIN,
+                profile_identifier(entry, profile["profileId"]),
+            ) in device.identifiers:
+                return profile["profileId"]
+    return resolve_profile(entry, call.data)
+
+
 async def async_switch_profile_service(call: ServiceCall) -> None:
-    """Switch an explicit profile on the target Core instance."""
-    params = {"profileId": call.data["profile_id"]}
-    if "pin" in call.data:
-        params["pin"] = call.data["pin"]
+    """Switch by ID, person or profile device; Core still enforces PINs."""
     for device_id in dict.fromkeys(_device_ids_from_target(call)):
-        ws = _get_ws_for_device(call.hass, device_id)
-        await ws.send_jsonrpc("profiles.switch", params)
-        await ws.refresh()
+        entry = _get_entry_for_device(call.hass, device_id)
+        params = (
+            {}
+            if call.data.get("deactivate")
+            else {"profileId": _profile_for_target(entry, call, device_id)}
+        )
+        if "pin" in call.data:
+            params["pin"] = call.data["pin"]
+        await entry.runtime_data.client.send_jsonrpc("profiles.switch", params)
+        await entry.runtime_data.client.refresh()
+
+
+async def async_set_profile_limits_service(call: ServiceCall) -> None:
+    """Change Core limit overrides once, without a scheduler or local rules."""
+    fields = {
+        "enabled": "limitsEnabled",
+        "daily_minutes": "dailyLimit",
+        "session_minutes": "sessionLimit",
+    }
+    changes = {}
+    for field, core_field in fields.items():
+        if field in call.data:
+            value = call.data[field]
+            changes[core_field] = (
+                f"{value * 60}s" if field.endswith("_minutes") else value
+            )
+    if call.data.get("clear_limits"):
+        changes["clearLimits"] = True
+    if not changes:
+        msg = "Specify a limit setting or clear_limits"
+        raise HomeAssistantError(msg)
+    for device_id in dict.fromkeys(_device_ids_from_target(call)):
+        entry = _get_entry_for_device(call.hass, device_id)
+        params = {"profileId": _profile_for_target(entry, call, device_id), **changes}
+        await entry.runtime_data.client.send_jsonrpc("profiles.update", params)
+        await entry.runtime_data.client.refresh()
 
 
 def async_register_services(hass: HomeAssistant) -> None:
@@ -165,6 +228,11 @@ def async_register_services(hass: HomeAssistant) -> None:
         (SERVICE_STOP, async_stop_service, NO_BODY_SCHEMA),
         (SERVICE_MEDIA, async_media_service, NO_BODY_SCHEMA),
         (SERVICE_SWITCH_PROFILE, async_switch_profile_service, SWITCH_PROFILE_SCHEMA),
+        (
+            SERVICE_SET_PROFILE_LIMITS,
+            async_set_profile_limits_service,
+            PROFILE_LIMITS_SCHEMA,
+        ),
     ):
         if not hass.services.has_service(DOMAIN, name):
             hass.services.async_register(
@@ -180,11 +248,25 @@ def async_register_services(hass: HomeAssistant) -> None:
 
 def async_unregister_services(hass: HomeAssistant) -> None:
     """Remove services after the final integration instance unloads."""
-    for name in (SERVICE_LAUNCH, SERVICE_STOP, SERVICE_MEDIA, SERVICE_SWITCH_PROFILE):
+    for name in (
+        SERVICE_LAUNCH,
+        SERVICE_STOP,
+        SERVICE_MEDIA,
+        SERVICE_SWITCH_PROFILE,
+        SERVICE_SET_PROFILE_LIMITS,
+    ):
         hass.services.async_remove(DOMAIN, name)
 
 
 def _get_ws_for_device(hass: HomeAssistant, device_id: str) -> ZaparooWebSocket:
+    """Route an existing action through the loaded Core instance."""
+    return _get_entry_for_device(hass, device_id).runtime_data.client
+
+
+def _get_entry_for_device(
+    hass: HomeAssistant, device_id: str
+) -> ZaparooDataConfigEntry:
+    """Resolve root and profile devices without crossing Core instances."""
     device_reg = dr.async_get(hass)
     device = device_reg.async_get(device_id)
 
@@ -192,20 +274,29 @@ def _get_ws_for_device(hass: HomeAssistant, device_id: str) -> ZaparooWebSocket:
         msg = f"Device not found: {device_id}"
         raise HomeAssistantError(msg)
 
-    for entry_id in device.config_entries:
+    entry_ids = (
+        {device.config_entry_id}
+        if hasattr(device, "config_entry_id")
+        else device.config_entries
+    )
+    for entry_id in entry_ids:
         entry = hass.config_entries.async_get_entry(entry_id)
 
-        if entry is None or entry.domain != DOMAIN:
+        if (
+            entry is None
+            or entry.domain != DOMAIN
+            or entry_id not in hass.data.get(DOMAIN, {})
+        ):
             continue
 
         zap_entry = cast("ZaparooDataConfigEntry", entry)
-        ws = zap_entry.runtime_data.client
+        runtime = getattr(zap_entry, "runtime_data", None)
 
-        if ws is None:
+        if runtime is None or runtime.client is None:
             msg = "Zaparoo is not connected"
             raise HomeAssistantError(msg)
 
-        return ws
+        return zap_entry
 
-    msg = "Zaparoo device not linked to config entry"
+    msg = "Zaparoo device not linked to a loaded config entry"
     raise HomeAssistantError(msg)

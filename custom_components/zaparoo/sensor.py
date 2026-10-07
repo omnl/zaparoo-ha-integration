@@ -14,6 +14,7 @@ from custom_components.zaparoo.const import DOMAIN
 from custom_components.zaparoo.coordinator import ZaparooCoordinator
 
 from .models import duration_minutes
+from .profile import ZaparooProfileEntity, async_add_profile_entities, profile_person
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -41,6 +42,21 @@ async def async_setup_entry(
             ZaparooPlaytimeSensor(entry, coordinator, "dailyUsageToday"),
             ZaparooPlaytimeSensor(entry, coordinator, "dailyRemaining"),
         ]
+    )
+
+    async_add_profile_entities(
+        entry,
+        add_entities,
+        lambda profile_id: [
+            ZaparooProfileValueSensor(entry, coordinator, profile_id, key)
+            for key in (
+                "role",
+                "dailyLimit",
+                "sessionLimit",
+                "dailyUsageToday",
+                "dailyRemaining",
+            )
+        ],
     )
 
 
@@ -160,6 +176,7 @@ class ZaparooProfileSensor(CoordinatorEntity, SensorEntity):
     ) -> None:
         """Initialize the profile sensor on the Core device."""
         super().__init__(coordinator)
+        self.entry = entry
         self._attr_unique_id = f"{entry.entry_id}_active_profile"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
 
@@ -174,6 +191,7 @@ class ZaparooProfileSensor(CoordinatorEntity, SensorEntity):
         profile = self.coordinator.data.get("active_profile") or {}
         return {
             "profile_id": profile.get("profileId"),
+            "person": profile_person(self.entry, profile.get("profileId")),
             "profiles": self.coordinator.data.get("profiles", []),
         }
 
@@ -191,6 +209,7 @@ class ZaparooPlaytimeSensor(CoordinatorEntity, SensorEntity):
         """Initialize a duration sensor on the Core device."""
         super().__init__(coordinator)
         self.field = field
+        self.entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{field}"
         self._attr_name = (
             "Media time today" if field == "dailyUsageToday" else "Daily time remaining"
@@ -203,3 +222,74 @@ class ZaparooPlaytimeSensor(CoordinatorEntity, SensorEntity):
         return duration_minutes(
             self.coordinator.data.get("playtime", {}).get(self.field)
         )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Identify whose live Core accounting the root sensor currently shows."""
+        profile_id = (self.coordinator.data.get("active_profile") or {}).get(
+            "profileId"
+        )
+        return {
+            "profile_id": profile_id,
+            "person": profile_person(self.entry, profile_id),
+        }
+
+
+class ZaparooProfileValueSensor(ZaparooProfileEntity, SensorEntity):
+    """Expose profile metadata and current accounting without fabricating history."""
+
+    def __init__(
+        self,
+        entry: ZaparooDataConfigEntry,
+        coordinator: ZaparooCoordinator,
+        profile_id: str,
+        field: str,
+    ) -> None:
+        """Initialize a stable profile sensor."""
+        super().__init__(entry, coordinator, profile_id, field)
+        self.field = field
+        self._attr_name = {
+            "role": "Role",
+            "dailyLimit": "Daily limit override",
+            "sessionLimit": "Session limit override",
+            "dailyUsageToday": "Media time today",
+            "dailyRemaining": "Daily time remaining",
+        }[field]
+        if field != "role":
+            self._attr_device_class = SensorDeviceClass.DURATION
+            self._attr_native_unit_of_measurement = UnitOfTime.MINUTES
+
+    @property
+    def available(self) -> bool:
+        """Only associate live playtime with the active profile."""
+        if self.field in ("dailyUsageToday", "dailyRemaining"):
+            active_id = (self.coordinator.data.get("active_profile") or {}).get(
+                "profileId"
+            )
+            return super().available and active_id == self.profile_id
+        return super().available
+
+    @property
+    def native_value(self) -> str | float | None:
+        """Read Core overrides or the verified active-profile accounting."""
+        if self.field == "role":
+            return (self.profile or {}).get("role")
+        if self.field in ("dailyUsageToday", "dailyRemaining"):
+            if not self.available:
+                return None
+            return duration_minutes(self.coordinator.data["playtime"].get(self.field))
+        return duration_minutes((self.profile or {}).get(self.field))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Distinguish inherited overrides from Core's explicit unlimited value."""
+        attrs = super().extra_state_attributes
+        profile = self.profile or {}
+        attrs["limits_enabled_override"] = profile.get("limitsEnabled")
+        if self.field in ("dailyLimit", "sessionLimit"):
+            value = profile.get(self.field)
+            attrs.update(
+                inherited=value is None,
+                unlimited=duration_minutes(value) == 0 if value is not None else None,
+            )
+        return attrs
